@@ -14,12 +14,16 @@ from researchlab.assemble import SplitSpec, assemble_dataset
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Assemble methylation dataset from FASTA + calls table.")
-    p.add_argument("--fasta", required=True, help="Reference genome FASTA.")
+    p.add_argument(
+        "--fasta",
+        default="",
+        help="Reference genome FASTA. Optional if calls file provides sequence_context.",
+    )
     p.add_argument("--calls", required=True, help="Methylation calls table (tsv or tsv.gz).")
     p.add_argument(
         "--calls-format",
         default="generic_tsv",
-        choices=["generic_tsv", "bismark_cx"],
+        choices=["generic_tsv", "bismark_cx", "allc_tsv", "unified_csv"],
         help="Input calls file format.",
     )
     p.add_argument("--split-spec", required=True, help="JSON with train/val/test chromosome lists.")
