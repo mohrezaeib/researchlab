@@ -1,0 +1,9 @@
+numpy==2.4.2
+pandas==3.0.1
+scikit-learn==1.8.0
+biopython==1.86
+pyarrow==23.0.1
+joblib==1.5.3
+torch==2.10.0
+transformers==5.2.0
+tqdm==4.67.3

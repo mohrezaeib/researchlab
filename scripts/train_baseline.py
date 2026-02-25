@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import importlib.metadata
 import json
 from pathlib import Path
+import platform
+import shlex
+import subprocess
 import sys
 
 import joblib
@@ -15,6 +20,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from researchlab.features import NgramFeaturizer
 from researchlab.metrics import compute_binary_metrics
+
+
+def _iso_utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _get_git_commit() -> str:
+    try:
+        out = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        return "unknown"
+    return out or "unknown"
+
+
+def _get_package_versions() -> dict[str, str]:
+    pkgs = ["pandas", "numpy", "scikit-learn", "biopython", "pyarrow", "joblib"]
+    versions: dict[str, str] = {}
+    for pkg in pkgs:
+        try:
+            versions[pkg] = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            versions[pkg] = "missing"
+    return versions
 
 
 def _parse_args() -> argparse.Namespace:
@@ -72,6 +100,7 @@ def _fit_and_eval(df: pd.DataFrame, outdir: Path, args: argparse.Namespace) -> d
 
 def main() -> None:
     args = _parse_args()
+    started_at = _iso_utc_now()
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -82,6 +111,23 @@ def main() -> None:
         raise SystemExit(f"dataset missing columns: {sorted(missing)}")
 
     metrics = _fit_and_eval(df, outdir, args)
+    finished_at = _iso_utc_now()
+    run_manifest = {
+        "git_commit_sha": _get_git_commit(),
+        "command": "python " + " ".join(shlex.quote(x) for x in sys.argv),
+        "args": vars(args),
+        "dataset_path": str(Path(args.dataset)),
+        "outdir": str(outdir),
+        "hostname": platform.node(),
+        "started_at_utc": started_at,
+        "finished_at_utc": finished_at,
+        "python_version": sys.version.split()[0],
+        "package_versions": _get_package_versions(),
+    }
+    (outdir / "run_manifest.json").write_text(
+        json.dumps(run_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     print(json.dumps(metrics, indent=2, sort_keys=True))
 
 

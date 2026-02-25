@@ -5,6 +5,16 @@ Phase 1 deliverables for the project “Cross-Species Transferability of Genomic
 - Data assembly: build labeled, leakage-safe train/val/test datasets from a reference genome FASTA + methylation call tables.
 - Baseline training: train a lightweight, reproducible baseline classifier on sequence windows and report standard metrics.
 
+## Setup (Headnode)
+
+```bash
+module load anaconda/3
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda create -n researchlab python=3.11 -y
+conda activate researchlab
+pip install -r requirements.txt
+```
+
 ## Quickstart (synthetic smoke test)
 
 ```bash
@@ -24,13 +34,77 @@ python scripts/train_baseline.py \
 
 ## Phase 1 (real public Arabidopsis data download)
 
-This downloads a TAIR10 reference genome FASTA from Ensembl Plants and a public ALLC methylation table from GEO (GSM2099378), then samples/filters calls and assembles `dataset.parquet` inside this repo.
+This pipeline supports three modes:
+- default: download + assemble
+- `--download-only`: headnode pre-download and manifest generation
+- `--assemble-only`: offline assembly from local pre-downloaded files (SLURM-safe)
 
 ```bash
 python scripts/phase1_run_athaliana.py --outdir data/phase1_athaliana
+python scripts/phase1_run_athaliana.py \
+  --download-only \
+  --outdir data/phase1_athaliana
+python scripts/phase1_run_athaliana.py \
+  --assemble-only \
+  --outdir data/phase1_athaliana \
+  --fasta data/phase1_athaliana/raw/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa \
+  --allc-gz data/phase1_athaliana/raw/GSM2099378_allc_9386.tsv.gz
 python scripts/train_baseline.py \
   --dataset data/phase1_athaliana/processed/dataset.parquet \
   --outdir runs/baseline_athaliana
+```
+
+## Canonical artifacts
+
+Assembly output (`data/phase1_athaliana/processed/`):
+- `downloads.summary.json`
+- `calls.sampled.tsv`
+- `calls.sampled.summary.json`
+- `splits.json`
+- `dataset.parquet`
+- `dataset.summary.json`
+
+Baseline output (`runs/baseline_athaliana/`):
+- `model.joblib`
+- `metrics.json`
+- `run_manifest.json`
+
+## Cluster execution
+
+See:
+- `cluster/slurm_phase1_assemble.sh`
+- `cluster/slurm_baseline_train.sh`
+- `cluster/slurm_transformer_train_gpu.sh`
+- `cluster/RUNBOOK.md`
+
+## Transformer model training (GPU-ready)
+
+Train a HuggingFace encoder + binary classifier head on the assembled dataset:
+
+```bash
+python scripts/train_transformer.py \
+  --dataset data/phase1_athaliana/processed/dataset.parquet \
+  --outdir runs/dnabert2_athaliana \
+  --model-name zhihan1996/DNABERT-2-117M \
+  --train-mode frozen \
+  --epochs 3 \
+  --batch-size 32 \
+  --max-length 256 \
+  --device auto
+```
+
+Available `--train-mode` values:
+- `frozen` (encoder frozen, train only classifier head)
+- `top` (unfreeze top N encoder layers + head)
+- `full` (full fine-tuning)
+
+Compare runs:
+
+```bash
+python scripts/compare_runs.py \
+  --run lr:runs/baseline_athaliana \
+  --run dnabert2:runs/dnabert2_athaliana \
+  --run nt:runs/nucleotide_transformer_athaliana
 ```
 
 ## Expected input formats
