@@ -5,5 +5,6 @@ biopython==1.86
 pyarrow==23.0.1
 joblib==1.5.3
 torch==2.10.0
-transformers==5.2.0
+transformers==4.39.3
 tqdm==4.67.3
+einops==0.8.2

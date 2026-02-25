@@ -54,6 +54,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--max-features", type=int, default=200_000)
     p.add_argument("--C", type=float, default=1.0, help="Inverse regularization strength.")
     p.add_argument("--max-iter", type=int, default=200)
+    p.add_argument("--solver", default="liblinear", choices=["liblinear", "lbfgs", "saga", "sag", "newton-cg"])
     return p.parse_args()
 
 
@@ -72,7 +73,7 @@ def _fit_and_eval(df: pd.DataFrame, outdir: Path, args: argparse.Namespace) -> d
     clf = LogisticRegression(
         C=args.C,
         max_iter=args.max_iter,
-        solver="liblinear",
+        solver=args.solver,
         class_weight="balanced",
     )
     pipe: Pipeline = Pipeline([("vect", vectorizer), ("clf", clf)])

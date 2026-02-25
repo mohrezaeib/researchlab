@@ -12,8 +12,13 @@
 set -euo pipefail
 
 module load anaconda/3
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate researchlab
+if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+  source "$HOME/miniconda3/etc/profile.d/conda.sh"
+else
+  source "$(conda info --base)/etc/profile.d/conda.sh"
+fi
+CONDA_ENV="${CONDA_ENV:-researchlab}"
+conda activate "$CONDA_ENV"
 
 PROJECT_ROOT="${PROJECT_ROOT:-$HOME/researchlab}"
 DATASET="${DATASET:-$PROJECT_ROOT/data/phase1_athaliana/processed/dataset.parquet}"

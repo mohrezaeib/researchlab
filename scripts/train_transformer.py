@@ -17,7 +17,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from researchlab.metrics import compute_binary_metrics
@@ -97,10 +97,48 @@ class SeqDataset(Dataset):
         return self.seqs[idx], int(self.labels[idx])
 
 
+def _seq_to_kmers(seq: str, k: int) -> str:
+    if k <= 1 or len(seq) < k:
+        return seq
+    return " ".join(seq[i : i + k] for i in range(0, len(seq) - k + 1))
+
+
+def _slice_context(seq: str, context_bp: int, mode: str) -> str:
+    if context_bp <= 0:
+        return seq
+    if not seq:
+        return seq
+    c = len(seq) // 2
+    if mode == "both":
+        s = max(0, c - context_bp)
+        e = min(len(seq) - 1, c + context_bp)
+        return seq[s : e + 1]
+    if mode == "upstream":
+        s = max(0, c - context_bp)
+        e = c
+        return seq[s : e + 1]
+    if mode == "downstream":
+        s = c
+        e = min(len(seq) - 1, c + context_bp)
+        return seq[s : e + 1]
+    raise ValueError(f"unknown context mode: {mode}")
+
+
 class HFSequenceClassifier(nn.Module):
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, trust_remote_code: bool = False) -> None:
         super().__init__()
-        self.encoder = AutoModel.from_pretrained(model_name)
+        try:
+            self.encoder = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+        except AttributeError as e:
+            if "pad_token_id" not in str(e):
+                raise
+            config = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+            config.pad_token_id = 0
+            self.encoder = AutoModel.from_pretrained(
+                model_name,
+                config=config,
+                trust_remote_code=trust_remote_code,
+            )
         hidden = int(self.encoder.config.hidden_size)
         self.classifier = nn.Linear(hidden, 1)
 
@@ -134,6 +172,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--debug-max-rows", type=int, default=None)
     p.add_argument("--device", default="auto", help="auto|cpu|cuda|cuda:0")
+    p.add_argument("--trust-remote-code", action="store_true")
+    p.add_argument("--context-bp", type=int, default=0, help="Bases around center cytosine to keep.")
+    p.add_argument("--context-mode", choices=["both", "upstream", "downstream"], default="both")
+    p.add_argument("--save-model", action="store_true", help="Save encoder/tokenizer weights to outdir/model.")
+    p.add_argument("--tokenization", choices=["auto", "raw", "kmer"], default="auto")
+    p.add_argument("--kmer-size", type=int, default=6)
     return p.parse_args()
 
 
@@ -141,10 +185,15 @@ def _prepare_dataloaders(
     df: pd.DataFrame,
     batch_size: int,
     num_workers: int,
+    context_bp: int,
+    context_mode: str,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    train = df[df["split"] == "train"]
-    val = df[df["split"] == "val"]
-    test = df[df["split"] == "test"]
+    work = df.copy()
+    if context_bp > 0:
+        work["seq"] = work["seq"].map(lambda s: _slice_context(str(s), context_bp, context_mode))
+    train = work[work["split"] == "train"]
+    val = work[work["split"] == "val"]
+    test = work[work["split"] == "test"]
     ds_train = SeqDataset(train["seq"].tolist(), train["label"].astype(int).tolist())
     ds_val = SeqDataset(val["seq"].tolist(), val["label"].astype(int).tolist())
     ds_test = SeqDataset(test["seq"].tolist(), test["label"].astype(int).tolist())
@@ -155,7 +204,14 @@ def _prepare_dataloaders(
     )
 
 
-def _collate(batch, tokenizer: AutoTokenizer, max_length: int, device: torch.device) -> tuple[dict, torch.Tensor]:
+def _collate(
+    batch,
+    tokenizer: AutoTokenizer,
+    max_length: int,
+    device: torch.device,
+    tokenization: str,
+    kmer_size: int,
+) -> tuple[dict, torch.Tensor]:
     if isinstance(batch, (list, tuple)) and len(batch) == 2 and isinstance(batch[0], (list, tuple)):
         seqs = list(batch[0])
         raw_labels = batch[1]
@@ -166,6 +222,8 @@ def _collate(batch, tokenizer: AutoTokenizer, max_length: int, device: torch.dev
     else:
         seqs = [x[0] for x in batch]
         labels = torch.tensor([x[1] for x in batch], dtype=torch.float32, device=device)
+    if tokenization == "kmer":
+        seqs = [_seq_to_kmers(s, kmer_size) for s in seqs]
     toks = tokenizer(
         seqs,
         padding=True,
@@ -184,12 +242,21 @@ def _predict_probs(
     tokenizer: AutoTokenizer,
     max_length: int,
     device: torch.device,
+    tokenization: str,
+    kmer_size: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     model.eval()
     y_true: list[int] = []
     y_prob: list[float] = []
     for batch in dl:
-        toks, labels = _collate(batch, tokenizer, max_length=max_length, device=device)
+        toks, labels = _collate(
+            batch,
+            tokenizer,
+            max_length=max_length,
+            device=device,
+            tokenization=tokenization,
+            kmer_size=kmer_size,
+        )
         logits = model(**toks)
         probs = torch.sigmoid(logits)
         y_true.extend(labels.detach().cpu().numpy().astype(int).tolist())
@@ -206,7 +273,8 @@ def _fit(
     test_dl: DataLoader,
     args: argparse.Namespace,
     device: torch.device,
-) -> dict:
+    tokenization: str,
+) -> tuple[dict, dict[str, tuple[np.ndarray, np.ndarray]]]:
     y_train = np.array([int(y) for _, y in train_dl.dataset], dtype=int)
     pos = int(y_train.sum())
     neg = int(len(y_train) - pos)
@@ -233,7 +301,14 @@ def _fit(
         running_loss = 0.0
         n_items = 0
         for batch in tqdm(train_dl, desc=f"epoch {epoch}/{args.epochs}", leave=False):
-            toks, labels = _collate(batch, tokenizer, max_length=args.max_length, device=device)
+            toks, labels = _collate(
+                batch,
+                tokenizer,
+                max_length=args.max_length,
+                device=device,
+                tokenization=tokenization,
+                kmer_size=args.kmer_size,
+            )
             logits = model(**toks)
             loss = criterion(logits, labels)
             opt.zero_grad(set_to_none=True)
@@ -243,7 +318,15 @@ def _fit(
             running_loss += float(loss.item()) * bs
             n_items += bs
 
-        y_val_true, y_val_prob = _predict_probs(model, val_dl, tokenizer, args.max_length, device)
+        y_val_true, y_val_prob = _predict_probs(
+            model,
+            val_dl,
+            tokenizer,
+            args.max_length,
+            device,
+            tokenization,
+            args.kmer_size,
+        )
         val_metrics = compute_binary_metrics(y_val_true, y_val_prob)
         val_metrics["rows"] = int(len(y_val_true))
         history.append(
@@ -255,9 +338,33 @@ def _fit(
             }
         )
 
-    y_train_true, y_train_prob = _predict_probs(model, train_dl, tokenizer, args.max_length, device)
-    y_val_true, y_val_prob = _predict_probs(model, val_dl, tokenizer, args.max_length, device)
-    y_test_true, y_test_prob = _predict_probs(model, test_dl, tokenizer, args.max_length, device)
+    y_train_true, y_train_prob = _predict_probs(
+        model,
+        train_dl,
+        tokenizer,
+        args.max_length,
+        device,
+        tokenization,
+        args.kmer_size,
+    )
+    y_val_true, y_val_prob = _predict_probs(
+        model,
+        val_dl,
+        tokenizer,
+        args.max_length,
+        device,
+        tokenization,
+        args.kmer_size,
+    )
+    y_test_true, y_test_prob = _predict_probs(
+        model,
+        test_dl,
+        tokenizer,
+        args.max_length,
+        device,
+        tokenization,
+        args.kmer_size,
+    )
     result = {"n_rows": int(len(y_train_true) + len(y_val_true) + len(y_test_true)), "history": history}
     for name, y_t, y_p in [
         ("train", y_train_true, y_train_prob),
@@ -267,7 +374,12 @@ def _fit(
         m = compute_binary_metrics(y_t, y_p)
         m["rows"] = int(len(y_t))
         result[name] = m
-    return result
+    pred_store = {
+        "train": (y_train_true, y_train_prob),
+        "val": (y_val_true, y_val_prob),
+        "test": (y_test_true, y_test_prob),
+    }
+    return result, pred_store
 
 
 def main() -> None:
@@ -290,11 +402,21 @@ def main() -> None:
             parts.append(df[df["split"] == split].head(args.debug_max_rows))
         df = pd.concat(parts, axis=0, ignore_index=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    model = HFSequenceClassifier(args.model_name).to(device)
-    train_dl, val_dl, test_dl = _prepare_dataloaders(df, args.batch_size, args.num_workers)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=args.trust_remote_code)
+    model = HFSequenceClassifier(args.model_name, trust_remote_code=args.trust_remote_code).to(device)
+    train_dl, val_dl, test_dl = _prepare_dataloaders(
+        df,
+        args.batch_size,
+        args.num_workers,
+        args.context_bp,
+        args.context_mode,
+    )
 
-    metrics = _fit(
+    tokenization = args.tokenization
+    if tokenization == "auto":
+        tokenization = "kmer" if "DNA_bert_6" in args.model_name else "raw"
+
+    metrics, pred_store = _fit(
         model=model,
         tokenizer=tokenizer,
         train_dl=train_dl,
@@ -302,10 +424,19 @@ def main() -> None:
         test_dl=test_dl,
         args=args,
         device=device,
+        tokenization=tokenization,
     )
     (outdir / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
-    tokenizer.save_pretrained(outdir / "model")
-    model.encoder.save_pretrained(outdir / "model")
+    np.savez(
+        outdir / "predictions_val_test.npz",
+        val_y_true=pred_store["val"][0],
+        val_y_prob=pred_store["val"][1],
+        test_y_true=pred_store["test"][0],
+        test_y_prob=pred_store["test"][1],
+    )
+    if args.save_model:
+        tokenizer.save_pretrained(outdir / "model")
+        model.encoder.save_pretrained(outdir / "model")
     torch.save(model.classifier.state_dict(), outdir / "classifier_head.pt")
 
     finished_at = _iso_utc_now()
@@ -321,6 +452,7 @@ def main() -> None:
         "finished_at_utc": finished_at,
         "python_version": sys.version.split()[0],
         "package_versions": _package_versions(),
+        "resolved_tokenization": tokenization,
     }
     (outdir / "run_manifest.json").write_text(json.dumps(run_manifest, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(metrics, indent=2, sort_keys=True))

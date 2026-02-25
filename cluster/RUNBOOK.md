@@ -88,7 +88,33 @@ tail -f slurm-baseline-train-<JOBID>.out
 tail -f slurm-transformer-train-<JOBID>.out
 ```
 
-## 7. Compare model runs
+## 7. GPU troubleshooting and context-matrix experiments
+
+GPU smoke test:
+
+```bash
+sbatch cluster/slurm_gpu_smoketest.sh
+```
+
+If this fails, check:
+- You are on headnode (`ssh 134.169.129.163`) and submitting with cluster credentials.
+- `module load anaconda/3` works inside the SLURM script.
+- `conda activate researchlab` points to an env with `torch` installed.
+
+Context window sweep (50/100/200/300/400; upstream/downstream/both):
+
+```bash
+OUTROOT=$HOME/researchlab/runs/context_matrix_5pct \
+DATASET=$HOME/researchlab/data/phase1_athaliana_5pct_w800/processed/dataset.parquet \
+MODEL_NAME=zhihan1996/DNA_bert_6 \
+sbatch cluster/slurm_context_matrix_gpu.sh
+```
+
+Auto-generated outputs:
+- `$OUTROOT/context_matrix_summary.csv`
+- `$OUTROOT/context_matrix_summary.md`
+
+## 8. Compare model runs
 
 ```bash
 python scripts/compare_runs.py \
@@ -98,7 +124,7 @@ python scripts/compare_runs.py \
   --out-csv runs/model_comparison.csv
 ```
 
-## 8. Repeatability check
+## 9. Repeatability check
 
 Run assembly twice with the same seed and parameters, then compare:
 

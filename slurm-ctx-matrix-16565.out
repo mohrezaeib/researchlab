@@ -1,0 +1,29 @@
+=== Running mode=upstream bp=50 out=/home/users/moba/researchlab/runs/context_matrix_5pct_gpu/upstream_50 ===
+2026-02-25 10:52:32.471189: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-02-25 10:52:34.076797: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:485] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2026-02-25 10:52:34.688112: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:8454] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2026-02-25 10:52:34.829265: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1452] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2026-02-25 10:52:35.849529: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-02-25 10:52:41.023386: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+Traceback (most recent call last):
+  File "/home/users/moba/researchlab/scripts/train_transformer.py", line 462, in <module>
+    main()
+  File "/home/users/moba/researchlab/scripts/train_transformer.py", line 406, in main
+    model = HFSequenceClassifier(args.model_name, trust_remote_code=args.trust_remote_code).to(device)
+  File "/home/users/moba/researchlab/scripts/train_transformer.py", line 131, in __init__
+    self.encoder = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+  File "/home/users/moba/miniconda3/envs/zai/lib/python3.10/site-packages/transformers/models/auto/auto_factory.py", line 604, in from_pretrained
+    return model_class.from_pretrained(
+  File "/home/users/moba/miniconda3/envs/zai/lib/python3.10/site-packages/transformers/modeling_utils.py", line 277, in _wrapper
+    return func(*args, **kwargs)
+  File "/home/users/moba/miniconda3/envs/zai/lib/python3.10/site-packages/transformers/modeling_utils.py", line 5048, in from_pretrained
+    ) = cls._load_pretrained_model(
+  File "/home/users/moba/miniconda3/envs/zai/lib/python3.10/site-packages/transformers/modeling_utils.py", line 5316, in _load_pretrained_model
+    load_state_dict(checkpoint_files[0], map_location="meta", weights_only=weights_only).keys()
+  File "/home/users/moba/miniconda3/envs/zai/lib/python3.10/site-packages/transformers/modeling_utils.py", line 508, in load_state_dict
+    check_torch_load_is_safe()
+  File "/home/users/moba/miniconda3/envs/zai/lib/python3.10/site-packages/transformers/utils/import_utils.py", line 1647, in check_torch_load_is_safe
+    raise ValueError(
+ValueError: Due to a serious vulnerability issue in `torch.load`, even with `weights_only=True`, we now require users to upgrade torch to at least v2.6 in order to use the function. This version restriction does not apply when loading files with safetensors.
+See the vulnerability report here https://nvd.nist.gov/vuln/detail/CVE-2025-32434
